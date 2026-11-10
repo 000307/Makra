@@ -1,6 +1,8 @@
 Attribute VB_Name = "Module4"
 Option Explicit
 
+Private FBStage As String
+
 ' Formats the existing PivotChart; does not create another chart.
 Public Sub FormatovaniBaterkaBezPretokuProcenta()
     Dim priorUpdating As Boolean
@@ -18,6 +20,7 @@ Public Sub FormatovaniBaterkaBezPretokuProcenta()
     Dim foundConsumption As Boolean
     Dim maxBattery As Double
     Dim errText As String
+    Dim errCode As Long
 
     priorUpdating = Application.ScreenUpdating
     priorEvents = Application.EnableEvents
@@ -25,6 +28,7 @@ Public Sub FormatovaniBaterkaBezPretokuProcenta()
     Application.ScreenUpdating = False
     Application.EnableEvents = False
 
+    FBStage = "Vyhledani zdrojoveho grafu"
     Set ws = FBTargetSheet()
     Set co = FBTargetChart(ws)
     Set graf = co.Chart
@@ -108,6 +112,9 @@ Public Sub FormatovaniBaterkaBezPretokuProcenta()
     graf.Refresh
     FBConfigureAxes graf, maxBattery
 
+    FBStage = "Kontrola vyslednych os"
+    FBValidateAxes graf
+    FBStage = "Aktualizace tlacitka"
     FBEnsureButton ws, co
     Application.EnableEvents = priorEvents
     Application.ScreenUpdating = priorUpdating
@@ -115,11 +122,13 @@ Public Sub FormatovaniBaterkaBezPretokuProcenta()
 
 Failed:
     errText = Err.Description
+    errCode = Err.Number
     On Error Resume Next
+    If Not graf Is Nothing Then FBHideSecondaryX graf
     Application.EnableEvents = priorEvents
     Application.ScreenUpdating = priorUpdating
     On Error GoTo 0
-    MsgBox "Graf se nepodarilo zformatovat: " & errText, vbExclamation, "Formatovani grafu"
+    MsgBox "Graf se nepodarilo zformatovat." & vbCrLf & "Krok: " & FBStage & vbCrLf & "Chyba " & errCode & ": " & errText, vbExclamation, "Formatovani grafu"
 End Sub
 
 
@@ -130,16 +139,40 @@ Private Sub FBConfigureAxes(ByVal graf As Chart, ByVal maxBattery As Double)
         decimalSeparator = Application.DecimalSeparator
     End If
 
-    ' A primary/secondary group is not itself a left/right position.
-    ' Category-axis crossings determine where the two Y axes are drawn.
+    FBStage = "Vytvoreni os a skryti druhe osy X"
     graf.HasAxis(xlCategory, xlPrimary) = True
     graf.HasAxis(xlCategory, xlSecondary) = True
     graf.HasAxis(xlValue, xlPrimary) = True
     graf.HasAxis(xlValue, xlSecondary) = True
+    ' Hide the extra X immediately, before any other formatting operation.
+    FBHideSecondaryX graf
 
+    FBStage = "Osa X: casy a dny"
+    With graf.Axes(xlCategory, xlPrimary)
+        .ReversePlotOrder = False
+        .CategoryType = xlCategoryScale
+        .AxisBetweenCategories = True
+        ' MultiLevel belongs to TickLabels, NOT Axis.
+        .TickLabels.MultiLevel = True
+        .TickLabels.Orientation = xlUpward
+        .TickLabels.Font.Size = 8
+        .TickLabels.Offset = 100
+        .TickLabelSpacingIsAuto = True
+        .TickLabelPosition = xlTickLabelPositionLow
+        .MajorTickMark = xlTickMarkNone
+        .MinorTickMark = xlTickMarkNone
+        .Format.Line.Visible = msoTrue
+        .Crosses = xlAxisCrossesMinimum
+    End With
+    With graf.Axes(xlCategory, xlSecondary)
+        .ReversePlotOrder = False
+        .CategoryType = xlCategoryScale
+        .AxisBetweenCategories = True
+        .Crosses = xlAxisCrossesMaximum
+    End With
+
+    FBStage = "Leva osa Y: spotreba v MWh"
     With graf.Axes(xlValue, xlPrimary)
-        .HasTitle = True
-        .AxisTitle.Text = "Spot" & ChrW(345) & "eba (MWh)"
         .ReversePlotOrder = False
         .MinimumScaleIsAuto = True
         .MaximumScaleIsAuto = True
@@ -153,9 +186,8 @@ Private Sub FBConfigureAxes(ByVal graf As Chart, ByVal maxBattery As Double)
         .Crosses = xlAxisCrossesMinimum
     End With
 
+    FBStage = "Prava osa Y: stav baterie v procentech"
     With graf.Axes(xlValue, xlSecondary)
-        .HasTitle = True
-        .AxisTitle.Text = "Stav baterie (%)"
         .ReversePlotOrder = False
         .MinimumScale = 0
         If maxBattery <= 1 Then
@@ -173,30 +205,62 @@ Private Sub FBConfigureAxes(ByVal graf As Chart, ByVal maxBattery As Double)
         .Crosses = xlAxisCrossesMinimum
     End With
 
-    With graf.Axes(xlCategory, xlPrimary)
-        .ReversePlotOrder = False
-        .CategoryType = xlCategoryScale
-        .AxisBetweenCategories = True
-        .HasMultiLevelLabels = True
-        .TickLabelSpacingIsAuto = True
-        .TickLabelPosition = xlTickLabelPositionLow
-        .MajorTickMark = xlTickMarkOutside
-        .MinorTickMark = xlTickMarkNone
-        .TickLabels.Orientation = 90
-        .Format.Line.Visible = msoTrue
-        .Crosses = xlAxisCrossesMinimum
+    ' Re-fetch both axes after all geometry changes and write titles LAST.
+    FBStage = "Umisteni a nazvy os Y"
+    graf.Axes(xlCategory, xlPrimary).Crosses = xlAxisCrossesMinimum
+    graf.Axes(xlCategory, xlSecondary).Crosses = xlAxisCrossesMaximum
+    FBHideSecondaryX graf
+    With graf.Axes(xlValue, xlPrimary)
+        .HasTitle = True
+        .AxisTitle.Text = "Spot" & ChrW(345) & "eba (MWh)"
     End With
+    With graf.Axes(xlValue, xlSecondary)
+        .HasTitle = True
+        .AxisTitle.Text = "Stav baterie (%)"
+    End With
+End Sub
 
-    With graf.Axes(xlCategory, xlSecondary)
-        .ReversePlotOrder = False
-        .CategoryType = xlCategoryScale
-        .AxisBetweenCategories = True
-        .TickLabelPosition = xlTickLabelPositionNone
-        .MajorTickMark = xlTickMarkNone
-        .MinorTickMark = xlTickMarkNone
-        .Format.Line.Visible = msoFalse
-        .Crosses = xlAxisCrossesMaximum
-    End With
+Private Sub FBHideSecondaryX(ByVal graf As Chart)
+    If graf.HasAxis(xlCategory, xlSecondary) Then
+        With graf.Axes(xlCategory, xlSecondary)
+            .TickLabelPosition = xlTickLabelPositionNone
+            .MajorTickMark = xlTickMarkNone
+            .MinorTickMark = xlTickMarkNone
+            .Format.Line.Visible = msoFalse
+        End With
+    End If
+End Sub
+
+Private Sub FBValidateAxes(ByVal graf As Chart)
+    Dim item As Series
+    Dim kind As Long
+    ' Postconditions are read back in Excel whenever the button is clicked.
+    If graf.Axes(xlCategory, xlPrimary).Crosses <> xlAxisCrossesMinimum Then
+        Err.Raise vbObjectError + 5210, , "Spotreba neni umistena vlevo."
+    End If
+    If graf.Axes(xlCategory, xlSecondary).Crosses <> xlAxisCrossesMaximum Then
+        Err.Raise vbObjectError + 5211, , "Baterie neni umistena vpravo."
+    End If
+    If graf.Axes(xlCategory, xlPrimary).TickLabelPosition <> xlTickLabelPositionLow Then
+        Err.Raise vbObjectError + 5212, , "Popisky osy X nejsou dole."
+    End If
+    If graf.Axes(xlCategory, xlSecondary).TickLabelPosition <> xlTickLabelPositionNone Then
+        Err.Raise vbObjectError + 5213, , "Druha osa X neni skryta."
+    End If
+    If graf.Axes(xlValue, xlPrimary).AxisTitle.Text <> "Spot" & ChrW(345) & "eba (MWh)" Then
+        Err.Raise vbObjectError + 5214, , "Leva osa Y nema spravny nazev."
+    End If
+    If graf.Axes(xlValue, xlSecondary).AxisTitle.Text <> "Stav baterie (%)" Then
+        Err.Raise vbObjectError + 5215, , "Prava osa Y nema spravny nazev."
+    End If
+    For Each item In graf.SeriesCollection
+        kind = FBKind(item.Name)
+        If kind = 1 Then
+            If item.AxisGroup <> xlSecondary Then Err.Raise vbObjectError + 5216, , "Baterie nema pravou osu Y."
+        ElseIf kind = 2 Or kind = 3 Then
+            If item.AxisGroup <> xlPrimary Then Err.Raise vbObjectError + 5217, , "Spotreba nema levou osu Y."
+        End If
+    Next item
 End Sub
 
 Private Function FBTargetSheet() As Worksheet
