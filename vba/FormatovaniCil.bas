@@ -3,7 +3,7 @@ Option Explicit
 
 Private FBStage As String
 
-' Formats the existing PivotChart; does not create another chart.
+' Keeps the historical entry-point name; this chart now uses SOC WITH overflows (main column P).
 Public Sub FormatovaniBaterkaBezPretokuProcenta()
     Dim priorUpdating As Boolean
     Dim priorEvents As Boolean
@@ -18,6 +18,7 @@ Public Sub FormatovaniBaterkaBezPretokuProcenta()
     Dim kind As Long
     Dim counts(1 To 3) As Long
     Dim foundConsumption As Boolean
+    Dim fieldsChanged As Boolean
     Dim maxBattery As Double
     Dim errText As String
     Dim errCode As Long
@@ -36,6 +37,8 @@ Public Sub FormatovaniBaterkaBezPretokuProcenta()
         Err.Raise vbObjectError + 5200, , "Cilovy graf neni kontingencni."
     End If
     Set pt = graf.PivotLayout.PivotTable
+    FBStage = "Vyber stavu baterie s pretoky"
+    FBEnsureBatteryField pt, fieldsChanged
 
     ' Add the original-consumption measure only when it is absent.
     For Each dataField In pt.DataFields
@@ -56,6 +59,9 @@ Public Sub FormatovaniBaterkaBezPretokuProcenta()
         If Not foundConsumption Then
             Err.Raise vbObjectError + 5201, , "Ve zdroji chybi pole Spotreba (MWh)."
         End If
+        fieldsChanged = True
+    End If
+    If fieldsChanged Then
         If Not pt.RefreshTable Then
             Err.Raise vbObjectError + 5202, , "Kontingencni tabulku se nepodarilo aktualizovat."
         End If
@@ -131,6 +137,48 @@ Failed:
     MsgBox "Graf se nepodarilo zformatovat." & vbCrLf & "Krok: " & FBStage & vbCrLf & "Chyba " & errCode & ": " & errText, vbExclamation, "Formatovani grafu"
 End Sub
 
+
+Private Sub FBEnsureBatteryField(ByVal pt As PivotTable, ByRef fieldsChanged As Boolean)
+    Dim i As Long
+    Dim dataField As PivotField
+    Dim sourceField As PivotField
+    Dim item As PivotField
+    Dim sourceName As String
+    Dim desiredField As PivotField
+
+    ' Remove only the other battery scenario from this specific PivotTable.
+    For i = pt.DataFields.Count To 1 Step -1
+        Set dataField = pt.DataFields(i)
+        sourceName = FBNorm(dataField.SourceName)
+        If sourceName = "aktualnistavbaterkybezpretoku(%)" Then
+            dataField.Orientation = xlHidden
+            fieldsChanged = True
+        ElseIf sourceName = "aktualnistavbaterkyspretoky(%)" Then
+            Set desiredField = dataField
+        End If
+    Next i
+    If Not desiredField Is Nothing Then
+        If desiredField.Position <> 1 Then
+            desiredField.Position = 1
+            fieldsChanged = True
+        End If
+        Exit Sub
+    End If
+
+    For Each item In pt.PivotFields
+        If FBNorm(item.Name) = "aktualnistavbaterkyspretoky(%)" Then
+            Set sourceField = item
+            Exit For
+        End If
+    Next item
+    If sourceField Is Nothing Then
+        Err.Raise vbObjectError + 5218, , "Ve zdroji chybi stav baterie s pretoky ze sloupce P."
+    End If
+    Set dataField = pt.AddDataField(sourceField, "Sou" & ChrW(269) & "et z " & sourceField.Name, xlSum)
+    dataField.NumberFormat = "0%"
+    dataField.Position = 1
+    fieldsChanged = True
+End Sub
 
 Private Sub FBConfigureAxes(ByVal graf As Chart, ByVal maxBattery As Double)
     Dim decimalSeparator As String
@@ -315,7 +363,7 @@ End Sub
 Private Function FBKind(ByVal caption As String) As Long
     Dim n As String
     n = FBNorm(caption)
-    If InStr(n, "aktualnistavbaterkybezpretoku") > 0 Or InStr(n, "aktualnistavbateriebezpretoku") > 0 Then
+    If InStr(n, "aktualnistavbaterkyspretoky") > 0 Or InStr(n, "aktualnistavbateriespretoky") > 0 Then
         FBKind = 1
     ElseIf InStr(n, "spotreba+baterka+pretoky(mwh)") > 0 Then
         FBKind = 2
